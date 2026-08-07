@@ -1,0 +1,6 @@
+{
+  "name": "ASFIM Business Intelligence",
+  "description": "Interactive business intelligence dashboard for ASFIM OPCVM funds tracking and analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

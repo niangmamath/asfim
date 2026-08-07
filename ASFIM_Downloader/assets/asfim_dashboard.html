@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ASFIM Executive Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root { --navy:#0f172a; --blue:#2563eb; --teal:#0f766e; --green:#16a34a; --red:#dc2626; --bg:#f8fafc; --card:#ffffff; --muted:#64748b; }
+    body { font-family: Inter, Segoe UI, Arial, sans-serif; margin:0; background:var(--bg); color:#0f172a; }
+    .shell { display:grid; grid-template-columns:280px 1fr; min-height:100vh; }
+    .sidebar { background:linear-gradient(180deg, var(--navy) 0%, #111827 100%); color:white; padding:24px; }
+    .sidebar h1 { font-size:1.2rem; margin:0 0 8px; }
+    .sidebar .brand { margin-bottom:24px; }
+    .nav { display:grid; gap:8px; }
+    .nav button { text-align:left; background:#ffffff10; color:white; border:0; padding:10px 12px; border-radius:10px; cursor:pointer; }
+    .nav button.active { background:white; color:var(--navy); }
+    .content { padding:24px; }
+    .topbar { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+    .filters { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:12px; margin-bottom:20px; }
+    .card { background:var(--card); border-radius:16px; padding:16px; box-shadow:0 8px 24px rgba(15,23,42,.06); }
+    .kpis { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:12px; margin-bottom:20px; }
+    .kpi { background:var(--card); border-radius:14px; padding:16px; }
+    .kpi .label { color:var(--muted); font-size:.9rem; }
+    .kpi .value { font-size:1.4rem; font-weight:700; margin-top:6px; }
+    .grid { display:grid; grid-template-columns:1.2fr .8fr; gap:16px; margin-bottom:16px; }
+    .table-wrap { overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:.92rem; }
+    th, td { padding:10px 8px; border-bottom:1px solid #e2e8f0; text-align:left; }
+    th { color:var(--muted); font-weight:600; }
+    .chip { display:inline-block; background:#eff6ff; color:#1d4ed8; padding:4px 8px; border-radius:999px; font-size:.8rem; }
+    @media (max-width: 900px){ .shell{grid-template-columns:1fr;} .sidebar{display:none;} }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <h1>ASFIM</h1>
+        <div>Executive Intelligence Platform</div>
+      </div>
+      <div class="nav">
+        <button class="active" data-view="executive">🏠 Executive Dashboard</button>
+        <button data-view="market">📊 Market Overview</button>
+        <button data-view="managers">🏦 Asset Managers</button>
+        <button data-view="funds">📈 Fund Explorer</button>
+      </div>
+    </aside>
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <h2 id="page-title">Executive Dashboard</h2>
+          <div id="page-subtitle">Vue consolidée des OPCVM marocains</div>
+        </div>
+        <div class="chip">Données issues du pipeline</div>
+      </div>
+
+      <div class="filters">
+        <div><label>Classification</label><select id="filter-classification"><option value="">Toutes</option></select></div>
+        <div><label>Société</label><select id="filter-societe"><option value="">Toutes</option></select></div>
+        <div><label>Type publication</label><select id="filter-type"><option value="">Tous</option></select></div>
+        <div><label>Recherche</label><input id="filter-search" placeholder="OPCVM, ISIN..." /></div>
+      </div>
+
+      <div class="kpis" id="kpi-grid"></div>
+
+      <div id="view-executive">
+        <div class="grid">
+          <div class="card"><canvas id="trend-chart"></canvas></div>
+          <div class="card"><canvas id="classification-chart"></canvas></div>
+        </div>
+        <div class="card">
+          <h3>Top 10 OPCVM</h3>
+          <div class="table-wrap"><table id="top-funds-table"></table></div>
+        </div>
+      </div>
+
+      <div id="view-market" style="display:none;">
+        <div class="grid">
+          <div class="card"><canvas id="market-chart"></canvas></div>
+          <div class="card"><canvas id="manager-chart"></canvas></div>
+        </div>
+      </div>
+
+      <div id="view-managers" style="display:none;">
+        <div class="card"><div id="manager-summary"></div></div>
+      </div>
+
+      <div id="view-funds" style="display:none;">
+        <div class="card"><div class="table-wrap"><table id="funds-table"></table></div></div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const dataUrl = 'dashboard_data.json';
+    let data = [];
+
+    function sanitize(v){ return (v===null||v===undefined||v==='')?'':String(v); }
+    function toNum(v){ const n = Number(String(v).replace(/,/g,'.').replace(/[^0-9.-]/g,'')); return Number.isFinite(n)?n:0; }
+
+    async function loadData(){
+      const response = await fetch(dataUrl);
+      data = await response.json();
+      data.forEach(row => {
+        row.AN = toNum(row.AN);
+        row.VL = toNum(row.VL);
+        row.YTD = toNum(row.YTD);
+        row['1 an'] = toNum(row['1 an']);
+      });
+      initFilters();
+      render();
+    }
+
+    function initFilters(){
+      const classifications = [...new Set(data.map(r => sanitize(r.Classification)).filter(Boolean))].sort();
+      const societies = [...new Set(data.map(r => sanitize(r['Société de Gestion'])).filter(Boolean))].sort();
+      const types = [...new Set(data.map(r => sanitize(r.TypePublication)).filter(Boolean))].sort();
+      fillSelect('filter-classification', classifications);
+      fillSelect('filter-societe', societies);
+      fillSelect('filter-type', types);
+    }
+
+    function fillSelect(id, values){
+      const el = document.getElementById(id);
+      values.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v; opt.textContent = v; el.appendChild(opt);
+      });
+    }
+
+    function getFilteredData(){
+      const cls = document.getElementById('filter-classification').value;
+      const soc = document.getElementById('filter-societe').value;
+      const type = document.getElementById('filter-type').value;
+      const search = document.getElementById('filter-search').value.toLowerCase();
+      return data.filter(row => {
+        const okCls = !cls || sanitize(row.Classification) === cls;
+        const okSoc = !soc || sanitize(row['Société de Gestion']) === soc;
+        const okType = !type || sanitize(row.TypePublication) === type;
+        const hay = `${sanitize(row.OPCVM)} ${sanitize(row['CODE ISIN'])} ${sanitize(row['Code Maroclear'])}`.toLowerCase();
+        const okSearch = !search || hay.includes(search);
+        return okCls && okSoc && okType && okSearch;
+      });
+    }
+
+    function render(){
+      const rows = getFilteredData();
+      renderKpis(rows);
+      renderExecutive(rows);
+      renderMarket(rows);
+      renderManagers(rows);
+      renderFunds(rows);
+    }
+
+    function renderKpis(rows){
+      const totalAn = rows.reduce((s,r)=>s+r.AN,0);
+      const totalVl = rows.reduce((s,r)=>s+r.VL,0);
+      const avgYtd = rows.length ? rows.reduce((s,r)=>s+r.YTD,0)/rows.length : 0;
+      const positive = rows.length ? rows.filter(r=>r.YTD>0).length/rows.length*100 : 0;
+      const html = `
+        <div class="kpi"><div class="label">Actif Net Total</div><div class="value">${totalAn.toLocaleString('fr-FR')} MAD</div></div>
+        <div class="kpi"><div class="label">Valeur Liquidative Totale</div><div class="value">${totalVl.toLocaleString('fr-FR')} MAD</div></div>
+        <div class="kpi"><div class="label">Nombre OPCVM</div><div class="value">${rows.length}</div></div>
+        <div class="kpi"><div class="label">Performance moyenne YTD</div><div class="value">${avgYtd.toFixed(2)}%</div></div>
+        <div class="kpi"><div class="label">Fonds positifs</div><div class="value">${positive.toFixed(1)}%</div></div>
+      `;
+      document.getElementById('kpi-grid').innerHTML = html;
+    }
+
+    function renderExecutive(rows){
+      const byDate = rows.reduce((acc,row)=>{ const d = sanitize(row.DatePublication).slice(0,10); acc[d] = (acc[d]||0)+row.AN; return acc; }, {});
+      const labels = Object.keys(byDate).sort();
+      const values = labels.map(k=>byDate[k]);
+      drawLineChart('trend-chart', labels, values, 'Actif Net');
+
+      const byClass = rows.reduce((acc,row)=>{ const k=sanitize(row.Classification)||'Non classé'; acc[k]=(acc[k]||0)+1; return acc; }, {});
+      drawDoughnutChart('classification-chart', Object.keys(byClass), Object.values(byClass), 'Répartition');
+
+      const top = rows.slice().sort((a,b)=>b.YTD-a.YTD).slice(0,10);
+      const rowsHtml = ['<thead><tr><th>OPCVM</th><th>YTD</th><th>Classification</th><th>AN</th></tr></thead><tbody>']
+        .concat(top.map(r=>`<tr><td>${sanitize(r.OPCVM)}</td><td>${r.YTD.toFixed(2)}%</td><td>${sanitize(r.Classification)}</td><td>${r.AN.toLocaleString('fr-FR')}</td></tr>`))
+        .concat('</tbody>');
+      document.getElementById('top-funds-table').innerHTML = rowsHtml.join('');
+    }
+
+    function renderMarket(rows){
+      const bySoc = rows.reduce((acc,row)=>{ const k=sanitize(row['Société de Gestion'])||'Inconnu'; acc[k]=(acc[k]||0)+row.AN; return acc; }, {});
+      const labels = Object.keys(bySoc).slice(0,8);
+      const values = labels.map(k=>bySoc[k]);
+      drawBarChart('market-chart', labels, values, 'AN par société');
+
+      const byClass = rows.reduce((acc,row)=>{ const k=sanitize(row.Classification)||'Non classé'; acc[k]=(acc[k]||0)+row.VL; return acc; }, {});
+      const classLabels = Object.keys(byClass);
+      const classValue = Object.values(byClass);
+      drawBarChart('manager-chart', classLabels, classValue, 'VL par classification');
+    }
+
+    function renderManagers(rows){
+      const groups = rows.reduce((acc,row)=>{ const k=sanitize(row['Société de Gestion'])||'Inconnu'; if(!acc[k]) acc[k]={soc:k, count:0, an:0, vl:0, ytd:0}; acc[k].count+=1; acc[k].an+=row.AN; acc[k].vl+=row.VL; acc[k].ytd+=row.YTD; return acc; }, {});
+      const items = Object.values(groups).sort((a,b)=>b.an-a.an).slice(0,8);
+      const html = items.map(item=>`<div class="card" style="margin-top:12px"><h3>${item.soc}</h3><div>OPCVM : ${item.count} · AN: ${item.an.toLocaleString('fr-FR')} · VL: ${item.vl.toLocaleString('fr-FR')} · YTD moyen: ${(item.ytd/item.count).toFixed(2)}%</div></div>`).join('');
+      document.getElementById('manager-summary').innerHTML = html;
+    }
+
+    function renderFunds(rows){
+      const table = rows.slice().sort((a,b)=>b.YTD-a.YTD).slice(0,40);
+      const html = ['<thead><tr><th>OPCVM</th><th>Classification</th><th>Société</th><th>YTD</th><th>AN</th></tr></thead><tbody>']
+        .concat(table.map(r=>`<tr><td>${sanitize(r.OPCVM)}</td><td>${sanitize(r.Classification)}</td><td>${sanitize(r['Société de Gestion'])}</td><td>${r.YTD.toFixed(2)}%</td><td>${r.AN.toLocaleString('fr-FR')}</td></tr>`))
+        .concat('</tbody>');
+      document.getElementById('funds-table').innerHTML = html.join('');
+    }
+
+    function drawLineChart(id, labels, values, label){
+      const ctx = document.getElementById(id).getContext('2d');
+      new Chart(ctx, { type:'line', data:{ labels, datasets:[{ label, data:values, borderColor:'#2563eb', backgroundColor:'rgba(37,99,235,.12)', tension:.3 }] }, options:{ responsive:true, plugins:{ legend:{display:false}} }});
+    }
+
+    function drawDoughnutChart(id, labels, values, label){
+      const ctx = document.getElementById(id).getContext('2d');
+      new Chart(ctx, { type:'doughnut', data:{ labels, datasets:[{ label, data:values, backgroundColor:['#2563eb','#0f766e','#16a34a','#dc2626','#64748b'] }] }, options:{ responsive:true }});
+    }
+
+    function drawBarChart(id, labels, values, label){
+      const ctx = document.getElementById(id).getContext('2d');
+      new Chart(ctx, { type:'bar', data:{ labels, datasets:[{ label, data:values, backgroundColor:'#2563eb' }] }, options:{ responsive:true, plugins:{ legend:{display:false}} }});
+    }
+
+    document.querySelectorAll('.nav button').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      const view = btn.dataset.view;
+      document.getElementById('page-title').textContent = btn.textContent.replace(/^[^a-zA-ZÀ-ÿ]+/, '').trim();
+      document.getElementById('page-subtitle').textContent = view==='executive' ? 'Vue consolidée des OPCVM marocains' : view==='market' ? 'Vue marché et répartitions' : view==='managers' ? 'Analyse par sociétés de gestion' : 'Exploration détaillée des fonds';
+      document.getElementById('view-executive').style.display = view==='executive' ? 'block' : 'none';
+      document.getElementById('view-market').style.display = view==='market' ? 'block' : 'none';
+      document.getElementById('view-managers').style.display = view==='managers' ? 'block' : 'none';
+      document.getElementById('view-funds').style.display = view==='funds' ? 'block' : 'none';
+    }));
+
+    ['filter-classification','filter-societe','filter-type','filter-search'].forEach(id => {
+      document.getElementById(id).addEventListener('input', render);
+      document.getElementById(id).addEventListener('change', render);
+    });
+
+    loadData();
+  </script>
+</body>
+</html>
