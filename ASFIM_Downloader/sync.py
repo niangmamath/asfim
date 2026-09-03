@@ -145,15 +145,38 @@ def main():
     with open("history.json", "w", encoding="utf-8") as f:
         json.dump(history_payload, f, ensure_ascii=False)
 
-    # latest_df/latest_date correspondent à la date la plus récente traitée dans CE run,
-    # qui est la date globale la plus récente puisque `missing` est triée par -date.
-    funds_payload = build_funds_payload(latest_df, latest_date)
-    with open("funds.json", "w", encoding="utf-8") as f:
-        json.dump(funds_payload, f, ensure_ascii=False)
+    # ATTENTION : `missing` ne contient que les dates pas encore importées, donc sa borne
+    # "la plus récente" (= latest_date ci-dessus) n'est la vraie date la plus récente QUE
+    # si ce run touche le front actuel. Pendant un rattrapage d'un bloc plus ancien (les
+    # dates les plus récentes étant déjà connues d'un run précédent), latest_date pointe
+    # vers le bloc traité, pas vers la vraie dernière publication. On compare aux vraies
+    # dates triées pour ne jamais publier un funds.json daté d'un vieux rattrapage.
+    true_latest_date = history_payload["dates"][0]["date"] if history_payload["dates"] else None
+
+    if true_latest_date == latest_date and latest_df is not None:
+        funds_df, funds_date = latest_df, latest_date
+    elif true_latest_date is not None:
+        true_latest_type = history_payload["dates"][0]["type"]
+        print(f"\nℹ️ Ce run a rattrapé un bloc plus ancien ; retéléchargement de "
+              f"{true_latest_date} (déjà connue) pour garder funds.json à jour.")
+        is_hebdo = true_latest_type == "Hebdomadaire"
+        download_file(true_latest_date)
+        file_path = DOWNLOAD_FOLDER / f"{true_latest_date}.xlsx"
+        funds_df = clean_numeric_columns(read_excel(file_path, true_latest_date, is_hebdo))
+        funds_date = true_latest_date
+    else:
+        funds_df, funds_date = None, None
+
+    if funds_df is not None:
+        funds_payload = build_funds_payload(funds_df, funds_date)
+        with open("funds.json", "w", encoding="utf-8") as f:
+            json.dump(funds_payload, f, ensure_ascii=False)
+        funds_summary = f"funds.json ({funds_payload['count']} fonds, date {funds_date})"
+    else:
+        funds_summary = "funds.json inchangé (aucune date exploitable)"
 
     print(f"\n🚀 Synchronisation réussie. {new_imports} nouvelle(s) date(s) ajoutée(s). "
-          f"history.json ({len(history_payload['history'])} date(s) au total) et funds.json "
-          f"({funds_payload['count']} fonds, date {latest_date}) régénérés.")
+          f"history.json ({len(history_payload['history'])} date(s) au total) et {funds_summary} régénérés.")
 
     write_github_output(True)
 
