@@ -36,10 +36,15 @@ jobs:
 
       # Les étapes suivantes ne servent à rien si sync.py n'a rien trouvé de nouveau :
       # elles recalculeraient/ré-uploaderaient le même history.json pour rien.
-      - name: Générer history.json
+      - name: Générer history.json (agrégat par société)
         if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader
         run: python build_history.py
+
+      - name: Générer funds.json (détail par fonds, dernière date)
+        if: steps.sync.outputs.changed == 'true'
+        working-directory: ASFIM_Downloader
+        run: python build_funds.py
 
       - name: Setup Node
         if: steps.sync.outputs.changed == 'true'
@@ -59,12 +64,19 @@ jobs:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
         run: node upload_history.mjs ../history.json history.json
 
-      - name: Committer l'état mis à jour (DB, exports, history.json)
+      - name: Uploader funds.json sur Vercel Blob
+        if: steps.sync.outputs.changed == 'true'
+        working-directory: ASFIM_Downloader/scripts
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: node upload_history.mjs ../funds.json funds.json
+
+      - name: Committer l'état mis à jour (DB, exports, history.json, funds.json)
         if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader
         run: |
           git config user.name "asfim-sync-bot"
           git config user.email "actions@github.com"
-          git add database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json
+          git add database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json funds.json
           git diff --cached --quiet || git commit -m "chore: sync ASFIM data $(date -u +%Y-%m-%d)"
           git push
