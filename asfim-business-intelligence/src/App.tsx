@@ -15,24 +15,29 @@ import {
   ResponsiveContainer
 } from 'recharts';
 
-// Fichier statique généré chaque jour par le workflow GitHub Actions (ASFIM_Downloader/build_history.py)
-// et publié sur Vercel Blob. Remplace l'ancien appel live à l'API Render.
-// Configurable via VITE_HISTORY_JSON_URL (voir .env.example) pour ne pas coder l'URL du store en dur.
+// Index léger généré chaque jour par ASFIM_Downloader/sync.py et publié sur
+// Vercel Blob : juste generated_at/classifications/dates, jamais le détail par
+// société de toutes les dates d'un coup (ça grossirait sans limite — un fichier
+// par date est chargé séparément à la demande, voir HISTORY_BASE_URL plus bas).
 const HISTORY_JSON_URL =
   import.meta.env.VITE_HISTORY_JSON_URL ||
   "https://REPLACE_WITH_YOUR_BLOB_STORE.public.blob.vercel-storage.com/history.json";
 
+// Base du store Blob, dérivée de HISTORY_JSON_URL, pour construire l'URL du
+// fichier d'une date précise : `${HISTORY_BASE_URL}/history/${date}.json`.
+const HISTORY_BASE_URL = HISTORY_JSON_URL.replace(/\/[^/]*$/, "");
+
 type HistorySnapshot = {
+  date: string;
   type: string;
   companies: any[];
   hierarchy: any[];
 };
 
-type HistoryPayload = {
+type HistoryIndex = {
   generated_at: string;
   classifications: string[];
   dates: { date: string; type: string }[];
-  history: Record<string, HistorySnapshot>;
 };
 
 // Détail par fonds individuel (dernière date), généré par ASFIM_Downloader/build_funds.py.
@@ -80,7 +85,9 @@ type FundSortKey =
   | "perf1m" | "perf3m" | "perf6m" | "perf1an";
 
 export default function App() {
-  const [fullHistory, setFullHistory] = useState<HistoryPayload | null>(null);
+  const [historyIndex, setHistoryIndex] = useState<HistoryIndex | null>(null);
+  const [dateSnapshot, setDateSnapshot] = useState<HistorySnapshot | null>(null);
+  const [snapshotLoading, setSnapshotLoading] = useState(true);
 
   const [isLoading, setIsLoading] = useState(true);
 
@@ -118,19 +125,22 @@ export default function App() {
   ];
 
   // ============================================================
-  // CHARGEMENT DES DONNÉES (un seul fetch, tout l'historique)
+  // CHARGEMENT DES DONNÉES
+  // L'index (léger : dates + classifications) est chargé une fois. Le détail
+  // par société d'UNE date précise n'est chargé qu'à la demande, quand la date
+  // effective change — jamais tout l'historique d'un coup (voir HISTORY_BASE_URL).
   // ============================================================
 
   useEffect(() => {
     setIsLoading(true);
 
-    fetch(HISTORY_JSON_URL, { cache: "no-store" })
+    fetch(HISTORY_JSON_URL)
       .then(response => {
         if (!response.ok) throw new Error("Erreur réseau");
         return response.json();
       })
-      .then((data: HistoryPayload) => {
-        setFullHistory(data);
+      .then((data: HistoryIndex) => {
+        setHistoryIndex(data);
         setIsLoading(false);
       })
       .catch(error => {
@@ -143,7 +153,7 @@ export default function App() {
   useEffect(() => {
     setFundsLoading(true);
 
-    fetch(FUNDS_JSON_URL, { cache: "no-store" })
+    fetch(FUNDS_JSON_URL)
       .then(response => {
         if (!response.ok) throw new Error("Erreur réseau");
         return response.json();
@@ -159,28 +169,55 @@ export default function App() {
   }, []);
 
   // ============================================================
-  // SÉLECTION DE LA DATE (filtrage 100% côté client)
+  // SÉLECTION DE LA DATE
   // "All" affiche la publication la plus récente disponible.
   // ============================================================
 
+  const effectiveDate = useMemo(() => {
+    if (!historyIndex) return undefined;
+    return selectedDate !== "All" ? selectedDate : historyIndex.dates[0]?.date;
+  }, [historyIndex, selectedDate]);
+
+  // Va chercher le détail (par société) de la date effective, une seule date à
+  // la fois — pas tout l'historique. Se redéclenche à chaque changement de date.
+  useEffect(() => {
+    if (!effectiveDate) return;
+
+    setSnapshotLoading(true);
+
+    fetch(`${HISTORY_BASE_URL}/history/${effectiveDate}.json`)
+      .then(response => {
+        if (!response.ok) throw new Error("Erreur réseau");
+        return response.json();
+      })
+      .then((data: HistorySnapshot) => {
+        setDateSnapshot(data);
+        setSnapshotLoading(false);
+      })
+      .catch(error => {
+        console.error("Erreur de connexion (date) :", error);
+        setSnapshotLoading(false);
+      });
+  }, [effectiveDate]);
+
   const dashboardData = useMemo(() => {
-    if (!fullHistory) {
+    if (!historyIndex) {
       return { filters: { dates: [], types: [], classifications: [] }, companies: [] as any[] };
     }
 
-    const effectiveDate = selectedDate !== "All" ? selectedDate : fullHistory.dates[0]?.date;
-    const snapshot = fullHistory.history[effectiveDate] || { companies: [], hierarchy: [] };
-    const types = Array.from(new Set(fullHistory.dates.map(d => d.type)));
+    const types = Array.from(new Set(historyIndex.dates.map(d => d.type)));
 
     return {
       filters: {
-        dates: fullHistory.dates,
+        dates: historyIndex.dates,
         types,
-        classifications: fullHistory.classifications
+        classifications: historyIndex.classifications
       },
-      companies: snapshot.companies
+      // Garde les données de la date précédente affichées pendant le chargement
+      // de la nouvelle plutôt que de vider l'écran à chaque changement de date.
+      companies: dateSnapshot?.companies ?? []
     };
-  }, [fullHistory, selectedDate]);
+  }, [historyIndex, dateSnapshot]);
 
   // ============================================================
   // FILTRES
@@ -949,7 +986,7 @@ export default function App() {
           <span className="text-base md:text-lg font-bold tracking-tight leading-none">
             {selectedDate !== "All"
               ? selectedDate
-              : fullHistory?.dates[0]?.date ?? "—"}
+              : historyIndex?.dates[0]?.date ?? "—"}
           </span>
 
         </div>

@@ -29,6 +29,12 @@ try {
     addRandomSuffix: false,
     allowOverwrite: true,
     token,
+    // Ces fichiers ne changent qu'une fois par jour au plus : pas besoin que
+    // le navigateur du visiteur en redemande une copie fraîche à chaque page.
+    // Vercel Blob mettait 1 an par défaut pour un chemin stable écrasé — trop
+    // long pour rester à jour ; no-store côté fetch() était l'autre extrême
+    // (jamais de cache). 1h est un compromis raisonnable vu la cadence réelle.
+    cacheControlMaxAge: 3600,
   });
   console.log('✅ Uploadé sur Vercel Blob :', blob.url);
 } catch (err) {

@@ -1,0 +1,35 @@
+name: (One-time) Migrate history.json to per-date files
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Générer blob_out/ (index + 1 fichier par date)
+        working-directory: ASFIM_Downloader
+        run: python _migrate_history.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Installer le SDK Vercel Blob
+        working-directory: ASFIM_Downloader/scripts
+        run: npm install
+
+      - name: Uploader blob_out/ sur Vercel Blob
+        working-directory: ASFIM_Downloader/scripts
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: node _migrate_upload.mjs ../blob_out

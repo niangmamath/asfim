@@ -26,10 +26,11 @@ jobs:
         working-directory: ASFIM_Downloader
         run: pip install -r requirements.txt
 
-      # sync.py lit l'état (dates déjà connues) directement depuis history.json
-      # sur Vercel Blob, met à jour l'objet en mémoire de façon incrémentale pour
-      # les nouvelles dates, et écrit history.json + funds.json localement.
-      # Plus de base SQLite ni de commit git : l'état ne vit que sur Blob.
+      # sync.py lit l'index (dates déjà connues) depuis Vercel Blob, ne traite que
+      # les publications plus récentes que la plus récente connue (pas de
+      # reconquête de tout l'historique ASFIM), et écrit dans blob_out/ un miroir
+      # local de l'arborescence Blob à uploader : history.json (index léger),
+      # history/<date>.json (un fichier par nouvelle date), funds.json.
       - name: Synchroniser (sync.py)
         id: sync
         working-directory: ASFIM_Downloader
@@ -48,16 +49,14 @@ jobs:
         working-directory: ASFIM_Downloader/scripts
         run: npm install
 
-      - name: Uploader history.json sur Vercel Blob
+      - name: Uploader blob_out/ sur Vercel Blob (un fichier par date)
         if: steps.sync.outputs.changed == 'true'
-        working-directory: ASFIM_Downloader/scripts
+        working-directory: ASFIM_Downloader
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
-        run: node upload_history.mjs ../history.json history.json
-
-      - name: Uploader funds.json sur Vercel Blob
-        if: steps.sync.outputs.changed == 'true'
-        working-directory: ASFIM_Downloader/scripts
-        env:
-          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
-        run: node upload_history.mjs ../funds.json funds.json
+        run: |
+          find blob_out -type f | while read -r f; do
+            target="${f#blob_out/}"
+            echo "-> $target"
+            node scripts/upload_history.mjs "$f" "$target"
+          done

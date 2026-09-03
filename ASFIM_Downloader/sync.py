@@ -1,25 +1,37 @@
 """
 Pipeline de synchronisation ASFIM.
 
-État persistant : PLUS de base SQLite committée dans git. Un fichier binaire
-comme SQLite ne se delta-compresse quasiment pas — chaque commit qui le
-touche fait grossir le .git d'à peu près la taille du fichier entier, pas de
-la taille du changement réel (le fichier est passé de 12 à 22 Mo en un seul
-run de rattrapage). Sur la durée, ça rend le repo de plus en plus lourd et
-lent à cloner/checkout, pour rien : la seule chose dont ce script a besoin,
-c'est de savoir quelles dates sont déjà connues.
+Portée volontairement limitée : l'objectif est de rester à jour avec ce
+qu'on a déjà et les prochains jours — pas de reconquérir tout l'historique
+ASFIM (des milliers de publications remontant à plusieurs années). Une
+publication n'est donc jamais considérée comme "manquante" si elle est
+antérieure à la plus ancienne déjà connue : `missing` ne contient que ce
+qui est plus récent que ce qu'on a déjà. Un run typique traite donc 0 à 2
+dates, jamais plus (sauf rattrapage après une panne de quelques jours,
+plafonné par MAX_BACKFILL).
 
-Cette information est déjà là : history.json publié sur Vercel Blob. Sa clé
-`history` contient une entrée par date déjà traitée. On le télécharge en
-début de run, on calcule les dates manquantes par rapport à cette liste, et
-pour chaque nouvelle date on ajoute directement son agrégat dans l'objet en
-mémoire (pas besoin de repartir d'un historique CSV complet) avant de
-réuploader. git ne stocke plus que du code.
+Stockage : plus de fichier history.json monolithique. Il grossissait avec
+chaque nouvelle date (jusqu'à plusieurs dizaines de Mo à terme) et devait
+être retéléchargé EN ENTIER par chaque visiteur à chaque page vue.
+L'historique par société est maintenant découpé en un fichier PAR DATE
+(history/<date>.json sur Blob), plus un petit index (history.json :
+generated_at/classifications/dates seulement, quelques dizaines de Ko) que
+le frontend charge en premier pour savoir quelle date afficher, puis quel
+fichier par date aller chercher.
+
+Ce script écrit tout dans blob_out/ (miroir local de l'arborescence Blob) ;
+c'est le workflow CI qui uploade chaque fichier trouvé dedans.
+
+État persistant : toujours pas de base SQLite committée dans git — l'index
+déjà publié sur Blob fait office de source de vérité pour "quelles dates
+sont déjà connues".
 """
 import json
 import os
+import shutil
 import traceback
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 
@@ -30,28 +42,29 @@ from config import DOWNLOAD_FOLDER
 from downloader import download_file
 from parser import read_excel
 
-MAX_BACKFILL = 90  # sécurité : ne jamais rattraper plus de N publications manquantes en un seul run
+MAX_BACKFILL = 90  # sécurité : ne jamais traiter plus de N nouvelles publications en un seul run
 
 HISTORY_JSON_URL = os.environ.get(
     "HISTORY_JSON_URL",
     "https://REPLACE_WITH_YOUR_BLOB_STORE.public.blob.vercel-storage.com/history.json",
 )
 
+BLOB_OUT = Path("blob_out")
 
-def load_current_history():
-    """Récupère l'état déjà publié sur Blob. Vide si premier run ou Blob indisponible
-    (dans ce dernier cas, MAX_BACKFILL évite un rattrapage complet incontrôlé)."""
+
+def load_current_index():
+    """Récupère l'index déjà publié sur Blob (dates/classifications seulement —
+    plus jamais le détail par société de toutes les dates d'un coup)."""
     try:
         response = requests.get(HISTORY_JSON_URL, timeout=30)
         response.raise_for_status()
         payload = response.json()
         payload.setdefault("classifications", [])
         payload.setdefault("dates", [])
-        payload.setdefault("history", {})
         return payload
     except Exception as e:
-        print(f"⚠️ Impossible de charger l'historique existant depuis Blob ({e}) — on repart de zéro.")
-        return {"classifications": [], "dates": [], "history": {}}
+        print(f"⚠️ Impossible de charger l'index existant depuis Blob ({e}) — on repart de zéro.")
+        return {"classifications": [], "dates": []}
 
 
 def write_github_output(changed: bool):
@@ -66,14 +79,26 @@ def write_github_output(changed: bool):
 def main():
     print("=== PIPELINE DE SYNCHRONISATION ASFIM ===")
 
-    history_payload = load_current_history()
-    imported_dates = set(history_payload["history"].keys())
-    print(f"{len(imported_dates)} date(s) déjà connue(s) (via history.json).")
+    if BLOB_OUT.exists():
+        shutil.rmtree(BLOB_OUT)
+    (BLOB_OUT / "history").mkdir(parents=True, exist_ok=True)
+
+    index = load_current_index()
+    known_dates = {d["date"] for d in index["dates"]}
+    newest_known = max(known_dates) if known_dates else None
+    print(f"{len(known_dates)} date(s) déjà connue(s) (via l'index Blob)."
+          + (f" Plus récente : {newest_known}." if newest_known else " Aucune date connue."))
 
     print("Connexion à l'API ASFIM...")
     all_publications = get_all_dates()  # trié par date décroissante
 
-    missing = [p for p in all_publications if p["date"] not in imported_dates]
+    if newest_known:
+        # Volontairement pas d'archéologie : seules les publications plus
+        # récentes que la plus récente déjà connue comptent comme "manquantes".
+        missing = [p for p in all_publications
+                   if p["date"] not in known_dates and p["date"] > newest_known]
+    else:
+        missing = [p for p in all_publications if p["date"] not in known_dates]
 
     if not missing:
         print("\n✅ Tout est déjà à jour. Aucune nouvelle publication à traiter.")
@@ -81,20 +106,21 @@ def main():
         return
 
     if len(missing) > MAX_BACKFILL:
-        print(f"⚠️ {len(missing)} publications manquantes détectées, "
+        print(f"⚠️ {len(missing)} nouvelles publications détectées, "
               f"au-delà de la limite de sécurité ({MAX_BACKFILL}). "
-              f"Seules les {MAX_BACKFILL} plus récentes seront rattrapées.")
+              f"Seules les {MAX_BACKFILL} plus récentes seront traitées.")
         missing = missing[:MAX_BACKFILL]
 
-    print(f"🆕 {len(missing)} publication(s) à rattraper : "
+    print(f"🆕 {len(missing)} publication(s) à traiter : "
           f"{', '.join(p['date'] for p in reversed(missing))}")
 
-    classifications = set(history_payload["classifications"])
+    classifications = set(index["classifications"])
+    new_dates_meta = []
     latest_df = None
     latest_date = None
     new_imports = 0
 
-    # --- TRAITEMENT DE TOUTES LES DATES MANQUANTES (de la plus ancienne à la plus récente) ---
+    # --- TRAITEMENT DE TOUTES LES NOUVELLES DATES (de la plus ancienne à la plus récente) ---
     for pub in reversed(missing):
         date = pub["date"]
         is_hebdo = pub["is_hebdo"]
@@ -113,11 +139,17 @@ def main():
             df = clean_numeric_columns(df)
             col_societe, col_classif = detect_columns(df)
 
-            history_payload["history"][date] = {
-                "type": "Hebdomadaire" if is_hebdo else "Quotidienne",
+            type_label = "Hebdomadaire" if is_hebdo else "Quotidienne"
+            snapshot = {
+                "date": date,
+                "type": type_label,
                 "companies": build_companies(df, col_societe, col_classif),
                 "hierarchy": build_hierarchy(df, col_classif, col_societe),
             }
+            with open(BLOB_OUT / "history" / f"{date}.json", "w", encoding="utf-8") as f:
+                json.dump(snapshot, f, ensure_ascii=False)
+
+            new_dates_meta.append({"date": date, "type": type_label})
             if col_classif in df.columns:
                 classifications.update(df[col_classif].dropna().astype(str).unique().tolist())
 
@@ -130,53 +162,32 @@ def main():
             continue
 
     if new_imports == 0:
-        print("\n⚠️ Aucune date n'a pu être importée malgré des publications manquantes détectées.")
+        print("\n⚠️ Aucune date n'a pu être traitée malgré des publications manquantes détectées.")
         write_github_output(False)
         return
 
-    history_payload["classifications"] = sorted(classifications)
-    history_payload["dates"] = sorted(
-        [{"date": d, "type": v["type"]} for d, v in history_payload["history"].items()],
+    all_dates_meta = sorted(
+        index["dates"] + new_dates_meta,
         key=lambda x: x["date"],
         reverse=True,
     )
-    history_payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+    new_index = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "classifications": sorted(classifications),
+        "dates": all_dates_meta,
+    }
+    with open(BLOB_OUT / "history.json", "w", encoding="utf-8") as f:
+        json.dump(new_index, f, ensure_ascii=False)
 
-    with open("history.json", "w", encoding="utf-8") as f:
-        json.dump(history_payload, f, ensure_ascii=False)
+    # `missing` ne contient jamais rien d'antérieur à `newest_known` : la dernière
+    # date traitée (latest_date) est donc toujours la vraie plus récente connue.
+    funds_payload = build_funds_payload(latest_df, latest_date)
+    with open(BLOB_OUT / "funds.json", "w", encoding="utf-8") as f:
+        json.dump(funds_payload, f, ensure_ascii=False)
 
-    # ATTENTION : `missing` ne contient que les dates pas encore importées, donc sa borne
-    # "la plus récente" (= latest_date ci-dessus) n'est la vraie date la plus récente QUE
-    # si ce run touche le front actuel. Pendant un rattrapage d'un bloc plus ancien (les
-    # dates les plus récentes étant déjà connues d'un run précédent), latest_date pointe
-    # vers le bloc traité, pas vers la vraie dernière publication. On compare aux vraies
-    # dates triées pour ne jamais publier un funds.json daté d'un vieux rattrapage.
-    true_latest_date = history_payload["dates"][0]["date"] if history_payload["dates"] else None
-
-    if true_latest_date == latest_date and latest_df is not None:
-        funds_df, funds_date = latest_df, latest_date
-    elif true_latest_date is not None:
-        true_latest_type = history_payload["dates"][0]["type"]
-        print(f"\nℹ️ Ce run a rattrapé un bloc plus ancien ; retéléchargement de "
-              f"{true_latest_date} (déjà connue) pour garder funds.json à jour.")
-        is_hebdo = true_latest_type == "Hebdomadaire"
-        download_file(true_latest_date)
-        file_path = DOWNLOAD_FOLDER / f"{true_latest_date}.xlsx"
-        funds_df = clean_numeric_columns(read_excel(file_path, true_latest_date, is_hebdo))
-        funds_date = true_latest_date
-    else:
-        funds_df, funds_date = None, None
-
-    if funds_df is not None:
-        funds_payload = build_funds_payload(funds_df, funds_date)
-        with open("funds.json", "w", encoding="utf-8") as f:
-            json.dump(funds_payload, f, ensure_ascii=False)
-        funds_summary = f"funds.json ({funds_payload['count']} fonds, date {funds_date})"
-    else:
-        funds_summary = "funds.json inchangé (aucune date exploitable)"
-
-    print(f"\n🚀 Synchronisation réussie. {new_imports} nouvelle(s) date(s) ajoutée(s). "
-          f"history.json ({len(history_payload['history'])} date(s) au total) et {funds_summary} régénérés.")
+    print(f"\n🚀 Synchronisation réussie. {new_imports} nouvelle(s) date(s) ajoutée(s) "
+          f"({len(all_dates_meta)} au total). funds.json : {funds_payload['count']} fonds, "
+          f"date {latest_date}.")
 
     write_github_output(True)
 

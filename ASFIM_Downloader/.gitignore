@@ -17,3 +17,4 @@ dashboard_data.csv
 dashboard_data.parquet
 history.json
 funds.json
+blob_out/
