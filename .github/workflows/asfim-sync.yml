@@ -77,6 +77,12 @@ jobs:
         run: |
           git config user.name "asfim-sync-bot"
           git config user.email "actions@github.com"
-          git add database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json funds.json
+          # N'ajoute que les fichiers réellement produits : si une étape annexe
+          # (ex. l'export parquet, utilisé seulement par le dashboard Streamlit local)
+          # échoue sans faire tomber tout le script, ça ne doit pas empêcher de
+          # committer le reste (DB, history.json, funds.json) et perdre l'état.
+          for f in database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json funds.json; do
+            [ -f "$f" ] && git add "$f" || echo "⚠️ absent, ignoré : $f"
+          done
           git diff --cached --quiet || git commit -m "chore: sync ASFIM data $(date -u +%Y-%m-%d)"
           git push

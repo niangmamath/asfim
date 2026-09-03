@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 import traceback
 from api import get_all_dates
 from downloader import download_file
@@ -6,6 +8,16 @@ from parser import read_excel
 from database import init_db, is_date_imported, save_data, export_for_powerbi
 
 MAX_BACKFILL = 90  # sécurité : ne jamais rattraper plus de N publications manquantes en un seul run
+
+
+def run_prepare_dashboard():
+    """Lance prepare_dashboard.py et logue clairement un échec au lieu de l'avaler
+    silencieusement (os.system ignorait le code de sortie -> des runs CI ont déjà
+    committé un état incomplet sans qu'on le sache)."""
+    result = subprocess.run([sys.executable, "prepare_dashboard.py"])
+    if result.returncode != 0:
+        print(f"⚠️ prepare_dashboard.py a échoué (code {result.returncode}). "
+              f"dashboard_data.csv/.parquet peuvent être manquants ou pas à jour.")
 
 
 def write_github_output(changed: bool):
@@ -37,7 +49,7 @@ def main():
             changed = True
         if not os.path.exists("dashboard_data.parquet"):
             print("\n⚙️  Création des datasets manquants pour le Dashboard Web...")
-            os.system("python prepare_dashboard.py")
+            run_prepare_dashboard()
             changed = True
         write_github_output(changed)
         return
@@ -85,7 +97,7 @@ def main():
         export_for_powerbi()
 
         print("\n⚙️  Mise à jour des datasets pour le Dashboard Web...")
-        os.system("python prepare_dashboard.py")
+        run_prepare_dashboard()
         changed = True
     else:
         print("\n⚠️ Aucune date n'a pu être importée malgré des publications manquantes détectées.")
