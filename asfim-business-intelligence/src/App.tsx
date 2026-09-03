@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, Download, Layers, Calendar, RefreshCw, Info, ArrowUpDown, X, SlidersHorizontal } from 'lucide-react';
+import { Search, Download, Layers, Calendar, RefreshCw, Info, ArrowUpDown, X, SlidersHorizontal, Building2, ShieldAlert } from 'lucide-react';
 import {
   PieChart,
   Pie,
@@ -58,6 +58,13 @@ type Fund = {
   perf2ans: number | null;
   perf3ans: number | null;
   perf5ans: number | null;
+  commissionSouscription: number | null;
+  commissionRachat: number | null;
+  fraisGestion: number | null;
+  depositaire: string | null;
+  sensibilite: string | null;
+  periodiciteVL: string | null;
+  affectationResultats: string | null;
   reseau: string[];
 };
 
@@ -86,9 +93,12 @@ export default function App() {
   const [fundClassif, setFundClassif] = useState("All");
   const [fundIndice, setFundIndice] = useState("All");
   const [fundReseau, setFundReseau] = useState("All");
+  const [fundDepositaire, setFundDepositaire] = useState("All");
+  const [fundSensibilite, setFundSensibilite] = useState("All");
   const [fundSort, setFundSort] = useState<{ key: FundSortKey; dir: 'asc' | 'desc' }>({ key: 'an', dir: 'desc' });
   const [selectedFundIsins, setSelectedFundIsins] = useState<string[]>([]);
   const [topPeriod, setTopPeriod] = useState<'perf1m' | 'perf3m' | 'perf1an'>('perf1an');
+  const [detailFund, setDetailFund] = useState<Fund | null>(null);
 
   const [selectedDate, setSelectedDate] = useState("All");
   const [selectedClassification, setSelectedClassification] = useState("All");
@@ -720,6 +730,20 @@ export default function App() {
     return Array.from(set).sort();
   }, [fundsData]);
 
+  const fundDepositaireOptions = useMemo(() => {
+    if (!fundsData) return [];
+    return Array.from(
+      new Set(fundsData.funds.map(f => f.depositaire).filter((v): v is string => !!v))
+    ).sort();
+  }, [fundsData]);
+
+  const fundSensibiliteOptions = useMemo(() => {
+    if (!fundsData) return [];
+    return Array.from(
+      new Set(fundsData.funds.map(f => f.sensibilite).filter((v): v is string => !!v && v !== "-"))
+    ).sort();
+  }, [fundsData]);
+
   // Top 4 par catégorie : les meilleurs fonds de chaque classification sur la période choisie.
   const topByClassification = useMemo(() => {
     if (!fundsData) return [] as { classification: string; top: Fund[] }[];
@@ -757,8 +781,10 @@ export default function App() {
       const matchClassif = fundClassif === "All" || f.classification === fundClassif;
       const matchIndice = fundIndice === "All" || f.indiceBenchmark === fundIndice;
       const matchReseau = fundReseau === "All" || (f.reseau || []).includes(fundReseau);
+      const matchDepositaire = fundDepositaire === "All" || f.depositaire === fundDepositaire;
+      const matchSensibilite = fundSensibilite === "All" || f.sensibilite === fundSensibilite;
 
-      return matchSearch && matchClassif && matchIndice && matchReseau;
+      return matchSearch && matchClassif && matchIndice && matchReseau && matchDepositaire && matchSensibilite;
     });
 
     const { key, dir } = fundSort;
@@ -776,7 +802,7 @@ export default function App() {
       const bn = bv == null ? -Infinity : Number(bv);
       return sign * (an - bn);
     });
-  }, [fundsData, fundSearch, fundClassif, fundIndice, fundReseau, fundSort]);
+  }, [fundsData, fundSearch, fundClassif, fundIndice, fundReseau, fundDepositaire, fundSensibilite, fundSort]);
 
   const handleFundSort = (key: FundSortKey) => {
     setFundSort(prev =>
@@ -813,6 +839,47 @@ export default function App() {
     if (Math.abs(v) >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(2)} Md`;
     if (Math.abs(v) >= 1_000_000) return `${(v / 1_000_000).toFixed(1)} M`;
     return v.toFixed(2);
+  };
+
+  const exportFundsToCSV = () => {
+    const headers = [
+      "ISIN", "Fonds", "Societe de Gestion", "Classification", "Indice de reference",
+      "Reseau", "Depositaire", "Sensibilite", "Periodicite VL", "Affectation des resultats",
+      "VL (MAD)", "Actif Net (MAD)",
+      "Commission souscription", "Commission rachat", "Frais de gestion",
+      "Perf 1 mois", "Perf 3 mois", "Perf 6 mois", "Perf 1 an"
+    ];
+
+    const rows = filteredFunds.map(f => [
+      `"${f.isin ?? ""}"`,
+      `"${f.name ?? ""}"`,
+      `"${f.societe ?? ""}"`,
+      `"${f.classification ?? ""}"`,
+      `"${f.indiceBenchmark ?? ""}"`,
+      `"${(f.reseau || []).join(" / ")}"`,
+      `"${f.depositaire ?? ""}"`,
+      `"${f.sensibilite ?? ""}"`,
+      `"${f.periodiciteVL ?? ""}"`,
+      `"${f.affectationResultats ?? ""}"`,
+      f.vl ?? "",
+      f.an ?? "",
+      f.commissionSouscription ?? "",
+      f.commissionRachat ?? "",
+      f.fraisGestion ?? "",
+      f.perf1m ?? "",
+      f.perf3m ?? "",
+      f.perf6m ?? "",
+      f.perf1an ?? "",
+    ]);
+
+    const csv =
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map(e => e.join(","))].join("\n");
+
+    const link = document.createElement("a");
+    link.href = encodeURI(csv);
+    link.download = `Export_ASFIM_Fonds_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
   };
 
   // ============================================================
@@ -1610,14 +1677,24 @@ export default function App() {
             ================================================ */}
 
             <section className="bg-white p-4 rounded-sm shadow-sm border border-slate-200/60">
-              <div className="flex items-center gap-2 mb-3">
-                <SlidersHorizontal className="w-3.5 h-3.5 text-[#00478F]" />
-                <h3 className="text-[10px] text-[#00478F] font-bold uppercase tracking-widest">
-                  {fundsData.count} fonds — publication du {fundsData.date}
-                </h3>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-[#00478F]" />
+                  <h3 className="text-[10px] text-[#00478F] font-bold uppercase tracking-widest">
+                    {fundsData.count} fonds — publication du {fundsData.date}
+                  </h3>
+                </div>
+
+                <button
+                  onClick={exportFundsToCSV}
+                  className="self-start sm:self-auto bg-[#4A90E2] hover:bg-[#357ABD] text-white px-3 py-1.5 rounded-sm text-[10px] font-bold transition-colors flex items-center"
+                >
+                  <Download className="w-3 h-3 mr-1.5" />
+                  Exporter
+                </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div className="relative">
                   <span className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                     <Search className="w-3.5 h-3.5" />
@@ -1661,6 +1738,28 @@ export default function App() {
                   <option value="All">Tous réseaux</option>
                   {fundReseauOptions.map(r => (
                     <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={fundDepositaire}
+                  onChange={e => setFundDepositaire(e.target.value)}
+                  className="w-full text-xs font-semibold bg-transparent border border-slate-200 rounded-sm px-2 py-2 focus:outline-none focus:border-[#00478F] text-[#00478F] cursor-pointer"
+                >
+                  <option value="All">Tous dépositaires</option>
+                  {fundDepositaireOptions.map(d => (
+                    <option key={d} value={d}>{d}</option>
+                  ))}
+                </select>
+
+                <select
+                  value={fundSensibilite}
+                  onChange={e => setFundSensibilite(e.target.value)}
+                  className="w-full text-xs font-semibold bg-transparent border border-slate-200 rounded-sm px-2 py-2 focus:outline-none focus:border-[#00478F] text-[#00478F] cursor-pointer"
+                >
+                  <option value="All">Toutes sensibilités</option>
+                  {fundSensibiliteOptions.map(s => (
+                    <option key={s} value={s}>{s}</option>
                   ))}
                 </select>
               </div>
@@ -1847,8 +1946,14 @@ export default function App() {
                             className="accent-[#00478F] cursor-pointer"
                           />
                         </td>
-                        <td className="px-4 py-2 font-semibold text-[#333333] whitespace-nowrap max-w-[220px] truncate" title={f.name ?? ""}>
-                          {f.name}
+                        <td className="px-4 py-2 whitespace-nowrap max-w-[220px] truncate">
+                          <button
+                            onClick={() => setDetailFund(f)}
+                            className="font-semibold text-[#00478F] hover:underline truncate max-w-full text-left"
+                            title={`Voir la fiche de ${f.name ?? ""}`}
+                          >
+                            {f.name}
+                          </button>
                         </td>
                         <td className="px-4 py-2 text-slate-500 whitespace-nowrap max-w-[180px] truncate" title={f.societe ?? ""}>
                           {f.societe}
@@ -1878,6 +1983,115 @@ export default function App() {
         )}
 
       </main>
+      )}
+
+      {/* ======================================================
+          FICHE DETAIL D'UN FONDS
+      ====================================================== */}
+
+      {detailFund && (
+        <div
+          className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
+          onClick={() => setDetailFund(null)}
+        >
+          <div
+            className="bg-white rounded-sm shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="sticky top-0 bg-white flex items-start justify-between gap-4 px-5 py-4 border-b border-slate-100">
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-[#00478F] truncate">{detailFund.name}</h3>
+                <p className="text-[11px] text-slate-500 truncate">{detailFund.societe}</p>
+              </div>
+              <button
+                onClick={() => setDetailFund(null)}
+                className="text-slate-400 hover:text-slate-600 flex-shrink-0"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-5">
+              <div>
+                <h4 className="text-[9px] text-[#4A90E2] font-bold uppercase tracking-widest mb-2">
+                  Caractéristiques
+                </h4>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[12px]">
+                  {[
+                    ["ISIN", detailFund.isin ?? "—"],
+                    ["Classification", detailFund.classification ?? "—"],
+                    ["Indice de référence", detailFund.indiceBenchmark ?? "—"],
+                    ["Réseau", (detailFund.reseau || []).join(", ") || "—"],
+                    ["Dépositaire", detailFund.depositaire ?? "—"],
+                    ["Sensibilité au risque", detailFund.sensibilite ?? "—"],
+                    ["Périodicité VL", detailFund.periodiciteVL ?? "—"],
+                    ["Affectation des résultats", detailFund.affectationResultats ?? "—"],
+                  ].map(([label, value]) => (
+                    <React.Fragment key={label}>
+                      <dt className="text-slate-400 font-semibold">{label}</dt>
+                      <dd className="text-[#333333] font-medium truncate" title={value}>{value}</dd>
+                    </React.Fragment>
+                  ))}
+                </dl>
+              </div>
+
+              <div>
+                <h4 className="text-[9px] text-[#4A90E2] font-bold uppercase tracking-widest mb-2">
+                  Frais
+                </h4>
+                <div className="grid grid-cols-3 gap-3">
+                  {[
+                    ["Souscription", detailFund.commissionSouscription],
+                    ["Rachat", detailFund.commissionRachat],
+                    ["Gestion", detailFund.fraisGestion],
+                  ].map(([label, value]) => (
+                    <div key={label as string} className="border border-slate-100 rounded-sm p-2.5">
+                      <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">{label}</div>
+                      <div className="text-[13px] font-semibold text-[#333333]">{fmtPct(value as number | null)}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-[9px] text-[#4A90E2] font-bold uppercase tracking-widest mb-2">
+                  Valeur &amp; performance
+                </h4>
+                <div className="grid grid-cols-2 gap-3 mb-3">
+                  <div className="border border-slate-100 rounded-sm p-2.5">
+                    <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">VL (MAD)</div>
+                    <div className="text-[13px] font-semibold text-[#333333]">{detailFund.vl?.toFixed(2) ?? "—"}</div>
+                  </div>
+                  <div className="border border-slate-100 rounded-sm p-2.5">
+                    <div className="text-[9px] text-slate-400 font-bold uppercase tracking-wider mb-1">Actif net</div>
+                    <div className="text-[13px] font-semibold text-[#333333]">{fmtMad(detailFund.an)}</div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                  {[
+                    ["1j", detailFund.perf1j],
+                    ["1s", detailFund.perf1s],
+                    ["1m", detailFund.perf1m],
+                    ["3m", detailFund.perf3m],
+                    ["6m", detailFund.perf6m],
+                    ["1an", detailFund.perf1an],
+                    ["2ans", detailFund.perf2ans],
+                    ["3ans", detailFund.perf3ans],
+                    ["5ans", detailFund.perf5ans],
+                  ].map(([label, value]) => (
+                    <div key={label as string} className="text-center border border-slate-100 rounded-sm py-2">
+                      <div className="text-[9px] text-slate-400 font-bold uppercase mb-1">{label}</div>
+                      <div className={`text-[11px] font-bold ${((value as number) ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                        {fmtPct(value as number | null)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

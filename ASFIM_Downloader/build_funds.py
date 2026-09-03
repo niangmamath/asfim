@@ -38,6 +38,13 @@ FIELD_MAP = {
     "2 ans": "perf2ans",
     "3 ans": "perf3ans",
     "5 ans": "perf5ans",
+    "Commission de souscription": "commissionSouscription",
+    "Commission de rachat": "commissionRachat",
+    "Frais de gestion": "fraisGestion",
+    "Dépositaire": "depositaire",
+    "Sensibilité": "sensibilite",
+    "Périodicité VL": "periodiciteVL",
+    "Affectation des résultats": "affectationResultats",
 }
 
 
