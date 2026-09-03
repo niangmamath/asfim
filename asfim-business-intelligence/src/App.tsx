@@ -88,6 +88,7 @@ export default function App() {
   const [fundReseau, setFundReseau] = useState("All");
   const [fundSort, setFundSort] = useState<{ key: FundSortKey; dir: 'asc' | 'desc' }>({ key: 'an', dir: 'desc' });
   const [selectedFundIsins, setSelectedFundIsins] = useState<string[]>([]);
+  const [topPeriod, setTopPeriod] = useState<'perf1m' | 'perf3m' | 'perf1an'>('perf1an');
 
   const [selectedDate, setSelectedDate] = useState("All");
   const [selectedClassification, setSelectedClassification] = useState("All");
@@ -718,6 +719,29 @@ export default function App() {
     fundsData.funds.forEach(f => (f.reseau || []).forEach(r => set.add(r)));
     return Array.from(set).sort();
   }, [fundsData]);
+
+  // Top 4 par catégorie : les meilleurs fonds de chaque classification sur la période choisie.
+  const topByClassification = useMemo(() => {
+    if (!fundsData) return [] as { classification: string; top: Fund[] }[];
+
+    const groups = new Map<string, Fund[]>();
+    fundsData.funds.forEach(f => {
+      const key = f.classification ?? "Autre";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(f);
+    });
+
+    return Array.from(groups.entries())
+      .map(([classification, funds]) => ({
+        classification,
+        top: [...funds]
+          .filter(f => f[topPeriod] != null)
+          .sort((a, b) => (b[topPeriod] as number) - (a[topPeriod] as number))
+          .slice(0, 4),
+      }))
+      .filter(g => g.top.length > 0)
+      .sort((a, b) => a.classification.localeCompare(b.classification));
+  }, [fundsData, topPeriod]);
 
   const filteredFunds = useMemo(() => {
     if (!fundsData) return [] as Fund[];
@@ -1639,6 +1663,81 @@ export default function App() {
                     <option key={r} value={r}>{r}</option>
                   ))}
                 </select>
+              </div>
+            </section>
+
+            {/* ================================================
+                TOP 4 PAR CATEGORIE
+            ================================================ */}
+
+            <section className="bg-white p-4 rounded-sm shadow-sm border border-slate-200/60">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
+                <h3 className="text-[10px] text-[#00478F] font-bold uppercase tracking-widest">
+                  Top 4 par catégorie
+                </h3>
+
+                <div className="flex gap-1">
+                  {([
+                    ["perf1m", "1 mois"],
+                    ["perf3m", "3 mois"],
+                    ["perf1an", "1 an"],
+                  ] as ['perf1m' | 'perf3m' | 'perf1an', string][]).map(([key, label]) => (
+                    <button
+                      key={key}
+                      onClick={() => setTopPeriod(key)}
+                      className={`px-2.5 py-1 text-[10px] font-bold rounded-sm border transition-colors ${
+                        topPeriod === key
+                          ? 'bg-[#00478F] text-white border-[#00478F]'
+                          : 'bg-white text-slate-500 border-slate-200 hover:border-[#00478F]'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {topByClassification.length === 0 && (
+                <p className="text-xs text-slate-400 text-center italic py-4">
+                  Pas de données de performance disponibles pour cette période.
+                </p>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {topByClassification.map(group => (
+                  <div key={group.classification} className="border border-slate-100 rounded-sm p-3">
+                    <h4 className="text-[10px] text-[#4A90E2] font-bold uppercase tracking-widest mb-2 pb-2 border-b border-slate-100">
+                      {group.classification}
+                    </h4>
+
+                    <div className="space-y-2">
+                      {group.top.map((f, i) => {
+                        const perf = f[topPeriod] as number;
+                        return (
+                          <div
+                            key={f.isin ?? f.name}
+                            className="flex justify-between items-center gap-2 cursor-pointer hover:bg-slate-50 px-1 py-0.5 rounded transition-colors"
+                            onClick={() => toggleFundSelection(f.isin)}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-[10px] font-bold text-slate-400 w-3 flex-shrink-0">{i + 1}.</span>
+                              <span className="text-[11px] font-semibold text-[#333333] truncate" title={f.name ?? ""}>
+                                {f.name}
+                              </span>
+                            </div>
+                            <span
+                              className={`text-[10px] font-bold px-1.5 py-0.5 rounded-sm flex-shrink-0 ${
+                                perf >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'
+                              }`}
+                            >
+                              {fmtPct(perf)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </section>
 
