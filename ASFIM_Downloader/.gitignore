@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+logs/
+downloads/*.xlsx
+
+# Fichiers node du script d'upload Blob
+scripts/node_modules/

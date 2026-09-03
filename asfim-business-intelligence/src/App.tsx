@@ -15,16 +15,32 @@ import {
   ResponsiveContainer
 } from 'recharts';
 
+// Fichier statique généré chaque jour par le workflow GitHub Actions (ASFIM_Downloader/build_history.py)
+// et publié sur Vercel Blob. Remplace l'ancien appel live à l'API Render.
+// Configurable via VITE_HISTORY_JSON_URL (voir .env.example) pour ne pas coder l'URL du store en dur.
+const HISTORY_JSON_URL =
+  import.meta.env.VITE_HISTORY_JSON_URL ||
+  "https://REPLACE_WITH_YOUR_BLOB_STORE.public.blob.vercel-storage.com/history.json";
+
+type HistorySnapshot = {
+  type: string;
+  companies: any[];
+  hierarchy: any[];
+};
+
+type HistoryPayload = {
+  generated_at: string;
+  classifications: string[];
+  dates: { date: string; type: string }[];
+  history: Record<string, HistorySnapshot>;
+};
+
 export default function App() {
-  const [dashboardData, setDashboardData] = useState({
-    filters: { dates: [], types: [], classifications: [] },
-    companies: [] as any[]
-  });
+  const [fullHistory, setFullHistory] = useState<HistoryPayload | null>(null);
 
   const [isLoading, setIsLoading] = useState(true);
 
   const [selectedDate, setSelectedDate] = useState("All");
-  const [selectedType, setSelectedType] = useState("All");
   const [selectedClassification, setSelectedClassification] = useState("All");
   const [activeCompany, setActiveCompany] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -42,30 +58,50 @@ export default function App() {
   ];
 
   // ============================================================
-  // API
+  // CHARGEMENT DES DONNÉES (un seul fetch, tout l'historique)
   // ============================================================
 
   useEffect(() => {
     setIsLoading(true);
 
-    const url =
-      `https://asfim-backend-gc1u.onrender.com/api/dashboard` +
-      `?date=${selectedDate}&type_pub=${selectedType}`;
-
-    fetch(url)
+    fetch(HISTORY_JSON_URL, { cache: "no-store" })
       .then(response => {
         if (!response.ok) throw new Error("Erreur réseau");
         return response.json();
       })
-      .then(data => {
-        setDashboardData(data);
+      .then((data: HistoryPayload) => {
+        setFullHistory(data);
         setIsLoading(false);
       })
       .catch(error => {
         console.error("Erreur de connexion :", error);
         setIsLoading(false);
       });
-  }, [selectedDate, selectedType]);
+  }, []);
+
+  // ============================================================
+  // SÉLECTION DE LA DATE (filtrage 100% côté client)
+  // "All" affiche la publication la plus récente disponible.
+  // ============================================================
+
+  const dashboardData = useMemo(() => {
+    if (!fullHistory) {
+      return { filters: { dates: [], types: [], classifications: [] }, companies: [] as any[] };
+    }
+
+    const effectiveDate = selectedDate !== "All" ? selectedDate : fullHistory.dates[0]?.date;
+    const snapshot = fullHistory.history[effectiveDate] || { companies: [], hierarchy: [] };
+    const types = Array.from(new Set(fullHistory.dates.map(d => d.type)));
+
+    return {
+      filters: {
+        dates: fullHistory.dates,
+        types,
+        classifications: fullHistory.classifications
+      },
+      companies: snapshot.companies
+    };
+  }, [fullHistory, selectedDate]);
 
   // ============================================================
   // FILTRES
@@ -73,18 +109,6 @@ export default function App() {
 
   const handleDateChange = (newDate: string) => {
     setSelectedDate(newDate);
-
-    if (newDate !== "All") {
-      const dateObj = dashboardData.filters.dates.find(
-        (d: any) => d.date === newDate
-      );
-
-      if (dateObj) {
-        setSelectedType(dateObj.type);
-      }
-    } else {
-      setSelectedType("All");
-    }
   };
 
   const companiesWithMainClassif = useMemo(() => {
@@ -669,7 +693,7 @@ export default function App() {
           <span className="text-base md:text-lg font-bold tracking-tight leading-none">
             {selectedDate !== "All"
               ? selectedDate
-              : "GLO"}
+              : fullHistory?.dates[0]?.date ?? "—"}
           </span>
 
         </div>

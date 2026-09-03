@@ -1,0 +1,62 @@
+name: ASFIM Sync
+
+on:
+  schedule:
+    # 03:00 UTC ≈ après la publication ASFIM habituelle (~01:00 heure du Maroc)
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: asfim-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python dependencies
+        working-directory: ASFIM_Downloader
+        run: pip install -r requirements.txt
+
+      - name: Rattraper les publications manquantes (sync.py)
+        working-directory: ASFIM_Downloader
+        run: python sync.py
+
+      - name: Générer history.json
+        working-directory: ASFIM_Downloader
+        run: python build_history.py
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Installer le SDK Vercel Blob
+        working-directory: ASFIM_Downloader/scripts
+        run: npm install
+
+      - name: Uploader history.json sur Vercel Blob
+        working-directory: ASFIM_Downloader/scripts
+        env:
+          BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
+        run: node upload_history.mjs ../history.json history.json
+
+      - name: Committer l'état mis à jour (DB, exports, history.json)
+        working-directory: ASFIM_Downloader
+        run: |
+          git config user.name "asfim-sync-bot"
+          git config user.email "actions@github.com"
+          git add database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json
+          git diff --cached --quiet || git commit -m "chore: sync ASFIM data $(date -u +%Y-%m-%d)"
+          git push
