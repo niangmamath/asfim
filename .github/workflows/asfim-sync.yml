@@ -30,29 +30,37 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Rattraper les publications manquantes (sync.py)
+        id: sync
         working-directory: ASFIM_Downloader
         run: python sync.py
 
+      # Les étapes suivantes ne servent à rien si sync.py n'a rien trouvé de nouveau :
+      # elles recalculeraient/ré-uploaderaient le même history.json pour rien.
       - name: Générer history.json
+        if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader
         run: python build_history.py
 
       - name: Setup Node
+        if: steps.sync.outputs.changed == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
       - name: Installer le SDK Vercel Blob
+        if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader/scripts
         run: npm install
 
       - name: Uploader history.json sur Vercel Blob
+        if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader/scripts
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
         run: node upload_history.mjs ../history.json history.json
 
       - name: Committer l'état mis à jour (DB, exports, history.json)
+        if: steps.sync.outputs.changed == 'true'
         working-directory: ASFIM_Downloader
         run: |
           git config user.name "asfim-sync-bot"

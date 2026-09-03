@@ -7,6 +7,16 @@ from database import init_db, is_date_imported, save_data, export_for_powerbi
 
 MAX_BACKFILL = 90  # sécurité : ne jamais rattraper plus de N publications manquantes en un seul run
 
+
+def write_github_output(changed: bool):
+    """Expose un output 'changed' au workflow GitHub Actions pour lui permettre
+    de sauter build_history.py / l'upload Blob quand il n'y a rien de nouveau."""
+    gh_output = os.environ.get("GITHUB_OUTPUT")
+    if gh_output:
+        with open(gh_output, "a", encoding="utf-8") as f:
+            f.write(f"changed={'true' if changed else 'false'}\n")
+
+
 def main():
     print("=== PIPELINE DE SYNCHRONISATION ASFIM ===")
 
@@ -18,13 +28,18 @@ def main():
     # --- Repérer TOUTES les publications non encore importées (pas seulement la plus récente) ---
     missing = [p for p in all_publications if not is_date_imported(p["date"])]
 
+    changed = False
+
     if not missing:
         print("\n✅ Tout est déjà à jour. Aucune nouvelle publication à traiter.")
         if not os.path.exists("asfim_historique_bi.csv"):
             export_for_powerbi()
+            changed = True
         if not os.path.exists("dashboard_data.parquet"):
             print("\n⚙️  Création des datasets manquants pour le Dashboard Web...")
             os.system("python prepare_dashboard.py")
+            changed = True
+        write_github_output(changed)
         return
 
     if len(missing) > MAX_BACKFILL:
@@ -50,37 +65,33 @@ def main():
             from config import DOWNLOAD_FOLDER
 
             file_path = DOWNLOAD_FOLDER / f"{date}.xlsx"
-            
+
             if not os.path.exists(file_path):
                 print(f"⚠️ Fichier {date}.xlsx introuvable après téléchargement.")
                 continue
-                
+
             df = read_excel(file_path, date, is_hebdo)
             save_data(df, date, is_hebdo)
             new_imports += 1
-            
+
         except Exception as e:
             print(f"❌ Erreur lors du traitement de la date {date}: {e}")
             traceback.print_exc()
             continue
 
-    # --- EXPORT FINAL POUR POWER BI ---
-    # --- EXPORT FINAL POUR POWER BI ET WEB ---
+    # --- EXPORT FINAL POUR POWER BI ET WEB (seulement si quelque chose a réellement été importé) ---
     if new_imports > 0:
         print(f"\n🚀 Synchronisation réussie. {new_imports} nouvelle(s) date(s) ajoutée(s).")
         export_for_powerbi()
-        
-        # Lancement automatique de la préparation pour le Web
+
         print("\n⚙️  Mise à jour des datasets pour le Dashboard Web...")
         os.system("python prepare_dashboard.py")
-        
+        changed = True
     else:
-        print("\n✅ Tout est déjà à jour pour les données les plus récentes.")
-        if not os.path.exists("asfim_historique_bi.csv"):
-            export_for_powerbi()
-        if not os.path.exists("dashboard_data.parquet"):
-            print("\n⚙️  Création des datasets manquants pour le Dashboard Web...")
-            os.system("python prepare_dashboard.py")
+        print("\n⚠️ Aucune date n'a pu être importée malgré des publications manquantes détectées.")
+
+    write_github_output(changed)
+
 
 if __name__ == "__main__":
     main()
