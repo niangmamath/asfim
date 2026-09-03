@@ -6,9 +6,6 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch: {}
 
-permissions:
-  contents: write
-
 concurrency:
   group: asfim-sync
   cancel-in-progress: false
@@ -29,22 +26,16 @@ jobs:
         working-directory: ASFIM_Downloader
         run: pip install -r requirements.txt
 
-      - name: Rattraper les publications manquantes (sync.py)
+      # sync.py lit l'état (dates déjà connues) directement depuis history.json
+      # sur Vercel Blob, met à jour l'objet en mémoire de façon incrémentale pour
+      # les nouvelles dates, et écrit history.json + funds.json localement.
+      # Plus de base SQLite ni de commit git : l'état ne vit que sur Blob.
+      - name: Synchroniser (sync.py)
         id: sync
         working-directory: ASFIM_Downloader
+        env:
+          HISTORY_JSON_URL: https://nhxdf2l6bfma6u8j.public.blob.vercel-storage.com/history.json
         run: python sync.py
-
-      # Les étapes suivantes ne servent à rien si sync.py n'a rien trouvé de nouveau :
-      # elles recalculeraient/ré-uploaderaient le même history.json pour rien.
-      - name: Générer history.json (agrégat par société)
-        if: steps.sync.outputs.changed == 'true'
-        working-directory: ASFIM_Downloader
-        run: python build_history.py
-
-      - name: Générer funds.json (détail par fonds, dernière date)
-        if: steps.sync.outputs.changed == 'true'
-        working-directory: ASFIM_Downloader
-        run: python build_funds.py
 
       - name: Setup Node
         if: steps.sync.outputs.changed == 'true'
@@ -70,19 +61,3 @@ jobs:
         env:
           BLOB_READ_WRITE_TOKEN: ${{ secrets.BLOB_READ_WRITE_TOKEN }}
         run: node upload_history.mjs ../funds.json funds.json
-
-      - name: Committer l'état mis à jour (DB, exports, history.json, funds.json)
-        if: steps.sync.outputs.changed == 'true'
-        working-directory: ASFIM_Downloader
-        run: |
-          git config user.name "asfim-sync-bot"
-          git config user.email "actions@github.com"
-          # N'ajoute que les fichiers réellement produits : si une étape annexe
-          # (ex. l'export parquet, utilisé seulement par le dashboard Streamlit local)
-          # échoue sans faire tomber tout le script, ça ne doit pas empêcher de
-          # committer le reste (DB, history.json, funds.json) et perdre l'état.
-          for f in database/asfim.db exports/asfim_historique_bi.csv dashboard_data.csv dashboard_data.parquet history.json funds.json; do
-            [ -f "$f" ] && git add "$f" || echo "⚠️ absent, ignoré : $f"
-          done
-          git diff --cached --quiet || git commit -m "chore: sync ASFIM data $(date -u +%Y-%m-%d)"
-          git push

@@ -1,77 +1,27 @@
 """
-Génère un unique fichier history.json contenant, pour CHAQUE date de publication,
-les agrégats par société de gestion (même logique que /api/dashboard côté api_server.py).
+Reconstruction manuelle/locale de history.json à partir d'un dashboard_data.csv
+complet (toutes dates). N'est PLUS appelé par le workflow CI : sync.py maintient
+désormais history.json de façon incrémentale, directement sur Vercel Blob, pour
+éviter de committer un historique CSV complet dans git (voir sync.py).
 
-Ce fichier est ensuite uploadé sur Vercel Blob et consommé statiquement par le frontend
-(plus besoin d'un backend live comme Render : le filtrage par date se fait côté client).
+Reste utile pour reconstruire l'historique en repartant de zéro si besoin.
 """
 import json
 from datetime import datetime, timezone
 
 import pandas as pd
 
+from aggregate import clean_numeric_columns, detect_columns as _detect_agg_columns, build_companies, build_hierarchy
+
 SOURCE_CSV = "dashboard_data.csv"
 OUTPUT_JSON = "history.json"
 
 
 def detect_columns(df):
-    col_societe = next((c for c in df.columns if "soci" in c.lower() and "gestion" in c.lower()), "Société de gestion")
-    col_classif = next((c for c in df.columns if "classif" in c.lower()), "Classification")
+    col_societe, col_classif = _detect_agg_columns(df)
     col_date = next((c for c in df.columns if "date" in c.lower()), "DatePublication")
     col_type = next((c for c in df.columns if "type" in c.lower()), "TypePublication")
     return col_societe, col_classif, col_date, col_type
-
-
-def build_companies(df, col_societe, col_classif):
-    companies = []
-    if df.empty or col_societe not in df.columns:
-        return companies
-
-    for name, group in df.groupby(col_societe):
-        assets = float(group["AN"].sum()) if "AN" in group.columns else 0.0
-        vl_total = float(group["VL"].sum()) if "VL" in group.columns else 0.0
-        funds_count = int(group["OPCVM"].nunique()) if "OPCVM" in group.columns else len(group)
-
-        positives = 0
-        perf_ytd = 0.0
-        if "YTD" in group.columns:
-            ytd_group = group["YTD"].dropna()
-            positives = int((ytd_group > 0).sum())
-            if not ytd_group.empty:
-                perf_ytd = float(ytd_group.mean())
-
-        classifications = group[col_classif].dropna().unique().tolist() if col_classif in group.columns else []
-
-        companies.append({
-            "id": str(name),
-            "name": str(name),
-            "assets": assets,
-            "vlTotal": vl_total,
-            "fundsCount": funds_count,
-            "positiveFundsCount": positives,
-            "classifications": classifications,
-            "perf1Y": perf_ytd
-        })
-
-    companies.sort(key=lambda c: c["assets"], reverse=True)
-    for i, c in enumerate(companies):
-        c["rank"] = i + 1
-
-    return companies
-
-
-def build_hierarchy(df, col_classif, col_societe):
-    hierarchy = []
-    if df.empty or col_classif not in df.columns or col_societe not in df.columns:
-        return hierarchy
-
-    for classif, classif_group in df.groupby(col_classif):
-        children = []
-        for soc, soc_group in classif_group.groupby(col_societe):
-            children.append({"name": str(soc), "size": float(soc_group["AN"].sum())})
-        hierarchy.append({"name": str(classif), "children": children})
-
-    return hierarchy
 
 
 def main():
@@ -79,18 +29,7 @@ def main():
     df.columns = [str(c).strip() for c in df.columns]
 
     col_societe, col_classif, col_date, col_type = detect_columns(df)
-
-    numeric_cols = ["AN", "VL", "YTD"]
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = (
-                df[col].astype(str)
-                .str.replace("%", "", regex=False)
-                .str.replace(",", ".", regex=False)
-                .str.replace(" ", "", regex=False)
-                .replace(["-", "", "nan", "None"], pd.NA)
-            )
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    df = clean_numeric_columns(df)
 
     if col_date in df.columns:
         df[col_date] = pd.to_datetime(df[col_date], errors="coerce").dt.strftime("%Y-%m-%d")

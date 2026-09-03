@@ -1,12 +1,16 @@
 """
-Génère funds.json : le détail par fonds individuel (OPCVM) sur la dernière
-date de publication disponible.
+Détail par fonds individuel (OPCVM) : funds.json.
 
-build_history.py agrège tout au niveau société de gestion ; ce script
+build_history.py agrège tout au niveau société de gestion ; ce module
 dénormalise au niveau fonds pour des usages que l'agrégat ne permet pas :
 classements par fonds, comparateur multi-fonds, filtres par indice de
 référence ou par réseau bancaire (toutes ces colonnes existent déjà dans
 la source ASFIM, elles n'étaient simplement pas exposées côté frontend).
+
+build_funds_payload() est importée directement par sync.py (traite le
+DataFrame de la date la plus récente déjà en mémoire, sans repasser par un
+fichier CSV). Le bloc __main__ ci-dessous reste utilisable pour une
+reconstruction manuelle/locale à partir de dashboard_data.csv.
 """
 import json
 from datetime import datetime, timezone
@@ -55,7 +59,28 @@ def parse_reseau(value):
     return [v.strip() for v in str(value).split(";") if v.strip()]
 
 
+def build_funds_payload(df, date_str):
+    """Construit le payload funds.json à partir du DataFrame d'UNE SEULE date."""
+    funds = []
+    for _, row in df.iterrows():
+        fund = {
+            new_key: clean(row[old_key])
+            for old_key, new_key in FIELD_MAP.items()
+            if old_key in df.columns
+        }
+        fund["reseau"] = parse_reseau(row.get("Réseau placeur"))
+        funds.append(fund)
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "date": str(date_str),
+        "count": len(funds),
+        "funds": funds,
+    }
+
+
 def main():
+    """Reconstruction manuelle/locale à partir de dashboard_data.csv (dernière date)."""
     df = pd.read_csv(SOURCE_CSV, encoding="utf-8-sig")
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -68,27 +93,12 @@ def main():
     latest_date = df["DatePublication"].max()
     latest = df[df["DatePublication"] == latest_date].copy()
 
-    funds = []
-    for _, row in latest.iterrows():
-        fund = {
-            new_key: clean(row[old_key])
-            for old_key, new_key in FIELD_MAP.items()
-            if old_key in latest.columns
-        }
-        fund["reseau"] = parse_reseau(row.get("Réseau placeur"))
-        funds.append(fund)
-
-    output = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "date": str(latest_date),
-        "count": len(funds),
-        "funds": funds,
-    }
+    output = build_funds_payload(latest, latest_date)
 
     with open(OUTPUT_JSON, "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False)
 
-    print(f"{OUTPUT_JSON} généré : {len(funds)} fonds pour la date {latest_date}.")
+    print(f"{OUTPUT_JSON} généré : {output['count']} fonds pour la date {latest_date}.")
 
 
 if __name__ == "__main__":
